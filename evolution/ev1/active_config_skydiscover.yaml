@@ -1,0 +1,84 @@
+# Active SkyDiscover configuration for evolved policy evolution
+# Search algorithm: AdaEvolve (multi-island with UCB bandit scheduling)
+# Seed: vllm/v1/kv_offload/cpu/policies/evolved.py
+#
+# Docs: https://github.com/skydiscover-ai/skydiscover
+
+# ── LLM configuration ────────────────────────────────────────────────────────
+llm:
+  models:
+    - name: "claude-sonnet-4-6"
+      weight: 1.0
+      api_base: https://ete-litellm.ai-models.vpc-int.res.ibm.com
+  api_base: https://ete-litellm.ai-models.vpc-int.res.ibm.com
+  api_key: ${OPENAI_API_KEY}
+  max_tokens: 40000
+  temperature: 0.8
+
+# ── Search algorithm ──────────────────────────────────────────────────────────
+search:
+  type: adaevolve
+  database:
+    population_size: 100
+    num_islands: 1
+
+# ── Evaluator settings ────────────────────────────────────────────────────────
+evaluator:
+  timeout: 14400
+  parallel_evaluations: 1
+  cascade_evaluation: false
+
+# ── Prompt configuration ──────────────────────────────────────────────────────
+prompt:
+  system_message: |
+    You are optimizing `EVCachePolicy` in vllm/v1/kv_offload/cpu/policies/evolved.py.
+
+    Objective: reduce the median TTFT and median TPOT (Time Per Output Token) (direction: minimize).
+
+    What this code does: The EVCachePolicy class implements the CachePolicy interface for the CPU KV offload cache used by CPUOffloadingManager. It decides which KV blocks to keep, evict, and promote between CPU and GPU memory.
+    Current approach: The seed is a pure LRU implementation using an OrderedDict for O(1) eviction and touch. The interface is CachePolicy in vllm/v1/kv_offload/cpu/policies/base.py; reference implementations are LRUCachePolicy in vllm/v1/kv_offload/cpu/policies/lru.py and ARCCachePolicy in vllm/v1/kv_offload/cpu/policies/arc.py.
+    Why evolve it: This is the eviction/admission algorithm that determines CPU cache effectiveness. Better policies can preserve recurring agent prefixes and shared prompts while filtering transient blocks, converting GPU misses into CPU->GPU promotions instead of full recomputes.
+
+    Only the region between # EVOLVE-BLOCK-START and # EVOLVE-BLOCK-END may change; everything else is fixed scaffolding.
+
+    ## Optimization goal
+    reduce the median TTFT and median TPOT (Time Per Output Token) — workload: Multi-turn agentic workload (direction: minimize)
+
+    ## Target
+    - `EVCachePolicy` in vllm/v1/kv_offload/cpu/policies/evolved.py (impact: high)
+
+    Current approach: Pure LRU with OrderedDict-based evictable list. The interface is CachePolicy in vllm/v1/kv_offload/cpu/policies/base.py; reference implementations are LRUCachePolicy in vllm/v1/kv_offload/cpu/policies/lru.py and ARCCachePolicy in vllm/v1/kv_offload/cpu/policies/arc.py.
+    Why it's worth evolving: The eviction policy directly controls CPU cache hit rate. Higher hit rate means more prefix reuse from CPU tier, reducing TTFT. Better algorithms (TinyLFU, SIEVE, S3-FIFO, 2Q, ARC variants) can distinguish recurring multi-turn prefixes from one-shot decode blocks.
+    Performance oracle: TTFT, TPOT, cpu_hit_rate
+
+    ## Research findings (4)
+    1. TinyLFU: A Highly Efficient Cache Admission Policy — paper — https://arxiv.org/abs/1512.00727
+       Technique: Replace simple reuse-threshold admission with a TinyLFU/W-TinyLFU admission sketch that compares a new block's recent frequency against the eviction candidate. This could preserve recurring agent prefixes and shared prompts while filtering one-off decode or transient blocks from CPU/offload capacity. | Evidence: "Quote: "Given a newly accessed item and an eviction candidate from the cache, our scheme decides, based on the recent access history, whether it is worth admitting the new item into the cache at the expense of the eviction candidate." Pointer: Abstract."
+    2. FIFO Queues are All You Need for Cache Eviction — paper — https://jasony.me/publication/sosp23-s3fifo.pdf
+       Technique: Add an S3-FIFO-style policy with a small probationary FIFO to evict one-hit blocks early and a main FIFO for repeatedly used blocks. This could improve hit rate and reduce Python-side recency maintenance overhead under skewed multi-turn workloads. | Evidence: "Quote: "The key of S3-FIFO is a small FIFO queue that filters out most objects from entering the main cache, which provides a guaranteed demotion speed and high demotion precision." Pointer: Abstract."
+    3. SIEVE is Simpler than LRU: an Efficient Turn-Key Eviction Algorithm for Web Caches — paper — https://www.usenix.org/conference/nsdi24/presentation/zhang-yazhuo
+       Technique: Use SIEVE's visited-bit and moving-hand eviction primitive to avoid reordering metadata on every hit. This could reduce scheduler CPU overhead in cache touch/evict paths while retaining strong miss-ratio behavior for skewed KV reuse. | Evidence: "Quote: "SIEVE's simplicity comes with superior scalability as cache hits require no locking." Pointer: USENIX abstract."
+    4. 2Q: A Low Overhead High Performance Buffer Management Replacement Algorithm — paper — https://www.vldb.org/conf/1994/P439.PDF
+       Technique: Use 2Q's recent, ghost, and frequent queues to avoid scan pollution while keeping constant-time overhead. This is a simpler alternative to ARC/LRU for distinguishing repeated multi-turn prefixes from one-pass prompt material. | Evidence: "Quote: "Our 'Two Queue' algorithm (hereafter 2Q) has constant time overhead, performs as well as LRU/2, and requires no tuning." Pointer: Abstract."
+
+    ## Existing proposals (6)
+    ← seeds/inspiration, the evolver may extend or discard
+    - [proposal_from_finding_creator] Add W-TinyLFU admission policy — frequency-based admission sketch that compares new block's frequency to eviction candidate, filtering one-shot blocks while preserving recurring prefixes.
+    - [proposal_from_finding_creator] Add S3-FIFO CachePolicy — probationary FIFO filters one-hit blocks early, main FIFO for repeatedly used blocks, removing per-touch recency list maintenance.
+    - [proposal_from_finding_creator] Add SIEVE eviction policy — visited-bit plus moving-hand, removes per-hit reordering while matching or improving miss ratios on skewed reuse patterns.
+    - [proposal_from_finding_creator] Add 2Q eviction policy — A1in/Am split keeps one-pass material from evicting the frequent set, ghost queue detects true re-use with constant overhead.
+    - [claude] Add LIRS eviction policy — inter-reference recency (IRR) based, treats blocks as 'hot' only when IRR is short, directly separating recurring prefixes from transient blocks.
+    - [codex] Allow out-of-tree CachePolicy plugins — changes the registry seam so deployment teams can ship workload-specific policies without modifying vLLM source.
+
+# ── General settings ──────────────────────────────────────────────────────────
+language: python
+max_iterations: 50
+diff_based_generation: false
+max_solution_length: 50000
+checkpoint_interval: 5
+random_seed: 42
+log_level: DEBUG
+
+# ── Monitoring dashboard ──────────────────────────────────────────────────────
+monitor:
+  enabled: false

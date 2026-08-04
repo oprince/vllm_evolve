@@ -25,11 +25,13 @@ from vllm.v1.kv_offload.cpu.common import (
 )
 from vllm.v1.kv_offload.cpu.policies.arc import ARCCachePolicy
 from vllm.v1.kv_offload.cpu.policies.base import BlockStatus, CachePolicy
+from vllm.v1.kv_offload.cpu.policies.evolved import EVCachePolicy
 from vllm.v1.kv_offload.cpu.policies.lru import LRUCachePolicy
 
 _CACHE_POLICIES: dict[str, type[CachePolicy]] = {
     "lru": LRUCachePolicy,
     "arc": ARCCachePolicy,
+    "evolved": EVCachePolicy,
 }
 
 
@@ -46,7 +48,7 @@ class CPUOffloadingManager(OffloadingManager):
     def __init__(
         self,
         num_blocks: int,
-        cache_policy: Literal["lru", "arc"] = "lru",
+        cache_policy: Literal["lru", "arc", "evolved"] = "lru",
         enable_events: bool = False,
         store_threshold: int = 1,
         max_tracker_size: int = 64_000,
