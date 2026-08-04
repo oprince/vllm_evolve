@@ -8,7 +8,15 @@ source .venv/bin/activate
 VLLM_USE_PRECOMPILED=1 uv pip install -e ".[skydiscover]" --torch-backend=auto
 ```
 
-## 2. Create `.env` at the project root
+## 2. Install inference-perf (optional)
+
+Only needed if using `EVOLVE_BENCH_BACKEND=inference_perf`:
+
+```bash
+uv pip install -e "git+https://github.ibm.com/AI4SYS/inference-perf.git@4343d0ee273fbbcd1724715541112228d86c2118#egg=inference_perf"
+```
+
+## 3. Create `.env` at the project root
 
 The `.env` file is not committed. Create it manually:
 
@@ -43,13 +51,19 @@ VLLM_PYTHON=.venv/bin/python
 EVOLVE_GPU_MEM_UTIL=0.9
 EVOLVE_MAX_CONCURRENCY=4
 EVOLVE_SERVER_TIMEOUT=180
+
+# Benchmark backend: "vllm_bench" (default) or "inference_perf"
 EVOLVE_BENCH_BACKEND=vllm_bench
+
+# Path to inference-perf config file (only used when EVOLVE_BENCH_BACKEND=inference_perf)
+# Defaults to evolution/ev1/config_inference_perf_swe.yml
+INFERENCE_PERF_CONFIG=/path/to/config_inference_perf.yml
 EOF
 ```
 
 Adjust `DATASET_PATH`, `OPENAI_API_KEY`, and `EVOLVE_MODEL` for your environment.
 
-## 3. Run the evolution
+## 4. Run the evolution
 
 ### Option A: Python wrapper (recommended)
 
@@ -86,7 +100,7 @@ python evolution/ev1/run_skydiscover.py \
   --iterations 3
 ```
 
-## 4. Resume from checkpoint
+## 5. Resume from checkpoint
 
 ```bash
 python evolution/ev1/run_skydiscover.py \
