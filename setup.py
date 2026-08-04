@@ -1274,6 +1274,8 @@ setup(
         ],
         # extra quantization plugin
         "extra-quant": ["vllm-gguf-plugin>=0.0.2"],
+        # SkyDiscover evolutionary search for KV offload policies
+        "skydiscover": ["skydiscover", "python-dotenv", "pyyaml", "requests"],
     },
     cmdclass=cmdclass,
     package_data=package_data,

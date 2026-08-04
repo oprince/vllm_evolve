@@ -74,7 +74,8 @@ def check_evolve_model_available(config_path: str) -> None:
 
     print(f"Checking evolve model availability: {model_name} @ {model_api_base}")
 
-    # Try a minimal completion request to verify the model is reachable
+    # Try a minimal completion request using the same sampling parameters
+    # that skydiscover will use, to catch parameter conflicts early
     url = f"{model_api_base.rstrip('/')}/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -85,6 +86,12 @@ def check_evolve_model_available(config_path: str) -> None:
         "messages": [{"role": "user", "content": "ping"}],
         "max_tokens": 1,
     }
+    # Include sampling params from config to detect conflicts (e.g. Bedrock
+    # rejects requests with both temperature and top_p)
+    if "temperature" in llm_cfg:
+        payload["temperature"] = llm_cfg["temperature"]
+    if "top_p" in llm_cfg:
+        payload["top_p"] = llm_cfg["top_p"]
 
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=30)
@@ -100,6 +107,12 @@ def check_evolve_model_available(config_path: str) -> None:
         elif resp.status_code >= 500:
             print(f"ERROR: Evolve model endpoint unavailable (server error)")
             print(f"  HTTP {resp.status_code}: {resp.text[:200]}")
+            sys.exit(1)
+        elif resp.status_code == 400:
+            print(f"ERROR: Evolve model rejected the request (bad parameters)")
+            print(f"  HTTP {resp.status_code}: {resp.text[:500]}")
+            print("  Check config sampling params (temperature/top_p) — "
+                  "some providers reject both simultaneously.")
             sys.exit(1)
         elif resp.status_code >= 400:
             print(f"ERROR: Evolve model request failed")
