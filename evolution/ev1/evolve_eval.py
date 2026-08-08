@@ -54,10 +54,9 @@ EVOLVE_BACKUP = EVOLVE_SRC.with_suffix(".py.bak")
 
 # ── Baseline metrics (fill in from Phase 1) ──────────────────────────────────
 
-BASELINE_THROUGHPUT = float(os.environ.get("EVOLVE_BASELINE_THROUGHPUT", "1.0"))
-# Mean TTFT (ms) of the unmodified LRU manager on the same benchmark workload.
-# Candidates score higher when their TTFT beats this number (ratio > 1).
-BASELINE_TTFT_MS = float(os.environ.get("EVOLVE_BASELINE_TTFT_MS", "81.0"))
+BASELINE_THROUGHPUT = float(os.environ.get("EVOLVE_BASELINE_THROUGHPUT", "0.641"))
+BASELINE_TTFT_MS = float(os.environ.get("EVOLVE_BASELINE_TTFT_MS", "263.0"))
+BASELINE_CPU_HIT_RATE = float(os.environ.get("EVOLVE_BASELINE_CPU_HIT_RATE", "0.341"))
 
 # ── Seed validation state ────────────────────────────────────────────────────
 
@@ -405,9 +404,10 @@ def _run_benchmark_inference_perf() -> dict:
     metrics = {
         "request_throughput": throughput.get("requests_per_sec", 0.0),
         "output_token_throughput": throughput.get("output_tokens_per_sec", 0.0),
-        "mean_ttft_ms": latency.get("time_to_first_token", {}).get("mean", 0.0),
-        "p99_ttft_ms": latency.get("time_to_first_token", {}).get("p99", 0.0),
-        "mean_request_latency_ms": latency.get("request_latency", {}).get("mean", 0.0),
+        # inference-perf reports latencies in seconds; convert to ms
+        "mean_ttft_ms": latency.get("time_to_first_token", {}).get("mean", 0.0) * 1000,
+        "p99_ttft_ms": latency.get("time_to_first_token", {}).get("p99", 0.0) * 1000,
+        "mean_request_latency_ms": latency.get("request_latency", {}).get("mean", 0.0) * 1000,
         "total_requests": successes.get("count", 0),
         "failures": summary.get("failures", {}).get("count", 0),
     }
@@ -572,23 +572,21 @@ def evaluate(program_path):
 
         # ── Compute composite score ──────────────────────────────────────
 
-        # 1. CPU cache hit rate — from vLLM's built-in external prefix cache
-        #    metrics (logged by the engine as "External prefix cache hit rate").
-        #    This measures: of tokens not found in GPU cache, what fraction was
-        #    served from the CPU offload tier via the KVConnector.
         cpu_hit_rate = engine_external_prefix_hit_rate or 0.0
 
-        # 2. TTFT ratio — behavioral consequence of offload quality.
-        #    A better eviction policy keeps hot prefix blocks in CPU, so
-        #    cache hits translate into less prefill work and lower TTFT.
-        #    Ratio > 1 means the candidate beat the baseline's mean TTFT.
         mean_ttft_ms = metrics.get("mean_ttft_ms", 0.0)
         ttft_ratio = (
             BASELINE_TTFT_MS / mean_ttft_ms if mean_ttft_ms > 0 else 0.0
         )
 
-        # 3. Throughput ratio (req/s vs baseline)
         throughput_ratio = metrics["request_throughput"] / BASELINE_THROUGHPUT
+
+        # Normalize cpu_hit_rate relative to baseline so all components
+        # are ratios centered at 1.0 when matching the ARC baseline.
+        cpu_hit_ratio = (
+            cpu_hit_rate / BASELINE_CPU_HIT_RATE
+            if BASELINE_CPU_HIT_RATE > 0 else cpu_hit_rate
+        )
 
         # Gate: zero CPU hits means the cache is non-functional — the program
         # may be gaming TTFT by bypassing lookups rather than improving eviction.
@@ -619,11 +617,11 @@ def evaluate(program_path):
         failure_rate = metrics.get("failures", 0) / max(total_requests, 1)
         failure_multiplier = max(0.0, 1.0 - 2 * failure_rate)
 
-        # TTFT is the primary goal (exp1 showed eviction quality shows up in
-        # TTFT more than raw hit count). cpu_hit_rate validates the mechanism.
+        # All three components are ratios vs ARC baseline (1.0 = matches ARC).
+        # Score > 1.0 means the candidate beats ARC overall.
         combined_score = (
             0.50 * ttft_ratio
-            + 0.30 * cpu_hit_rate
+            + 0.30 * cpu_hit_ratio
             + 0.20 * throughput_ratio
         ) * failure_multiplier
 
@@ -635,6 +633,7 @@ def evaluate(program_path):
         return {
             "combined_score": combined_score,
             "cpu_hit_rate": cpu_hit_rate,
+            "cpu_hit_ratio": cpu_hit_ratio,
             "ttft_ratio": ttft_ratio,
             "throughput_ratio": throughput_ratio,
             "engine_external_prefix_hit_rate": engine_external_prefix_hit_rate,
