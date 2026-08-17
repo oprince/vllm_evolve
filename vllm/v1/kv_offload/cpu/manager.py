@@ -72,6 +72,11 @@ class CPUOffloadingManager(OffloadingManager):
         self.max_tracker_size: int = max_tracker_size
         self.stores_skipped_in_current_batch: int = 0
 
+        self._lookups_in_current_batch: int = 0
+        self._hits_in_current_batch: int = 0
+        self._misses_in_current_batch: int = 0
+        self._evictions_in_current_batch: int = 0
+
         # Number of block references. It is ordered so can evict the LRU entry in O(1).
         self.counts: OrderedDict[OffloadKey, int] | None = (
             OrderedDict() if store_threshold >= 2 else None
@@ -116,6 +121,7 @@ class CPUOffloadingManager(OffloadingManager):
 
     @override
     def lookup(self, key: OffloadKey, req_context: ReqContext) -> LookupResult:
+        self._lookups_in_current_batch += 1
         if self.counts is not None:
             if key in self.counts:
                 self.counts.move_to_end(key)
@@ -126,7 +132,9 @@ class CPUOffloadingManager(OffloadingManager):
                 self.counts[key] = 1
         block = self._policy.get(key)
         if block is None:
+            self._misses_in_current_batch += 1
             return LookupResult.MISS
+        self._hits_in_current_batch += 1
         if not block.is_ready:
             return LookupResult.HIT_PENDING
         return LookupResult.HIT
@@ -211,6 +219,7 @@ class CPUOffloadingManager(OffloadingManager):
             for key, block in evicted:
                 self._free_block(block)
                 to_evict.append(key)
+            self._evictions_in_current_batch += len(evicted)
 
         if to_evict and self.events is not None:
             self.events.append(
@@ -308,4 +317,26 @@ class CPUOffloadingManager(OffloadingManager):
                 self.stores_skipped_in_current_batch,
             )
             self.stores_skipped_in_current_batch = 0
+
+        stats.increase_counter(
+            CPUOffloadingMetrics.CPU_BLOCK_LOOKUP_TOTAL,
+            self._lookups_in_current_batch,
+        )
+        stats.increase_counter(
+            CPUOffloadingMetrics.CPU_BLOCK_HIT_TOTAL,
+            self._hits_in_current_batch,
+        )
+        stats.increase_counter(
+            CPUOffloadingMetrics.CPU_BLOCK_MISS_TOTAL,
+            self._misses_in_current_batch,
+        )
+        stats.increase_counter(
+            CPUOffloadingMetrics.BLOCK_EVICTION_TOTAL,
+            self._evictions_in_current_batch,
+        )
+        self._lookups_in_current_batch = 0
+        self._hits_in_current_batch = 0
+        self._misses_in_current_batch = 0
+        self._evictions_in_current_batch = 0
+
         return stats

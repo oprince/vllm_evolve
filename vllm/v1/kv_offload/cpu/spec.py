@@ -37,7 +37,35 @@ class CPUOffloadingSpec(OffloadingSpec):
                     "values indicate transfers (stores or promotions) may be "
                     "dropped due to insufficient capacity."
                 ),
-            )
+            ),
+            CPUOffloadingMetrics.CPU_BLOCK_LOOKUP_TOTAL: (
+                OffloadingCounterMetadata(
+                    documentation=(
+                        "Total number of CPU KV-cache block lookups."
+                    ),
+                )
+            ),
+            CPUOffloadingMetrics.CPU_BLOCK_HIT_TOTAL: (
+                OffloadingCounterMetadata(
+                    documentation=(
+                        "Total number of CPU KV-cache block hits."
+                    ),
+                )
+            ),
+            CPUOffloadingMetrics.CPU_BLOCK_MISS_TOTAL: (
+                OffloadingCounterMetadata(
+                    documentation=(
+                        "Total number of CPU KV-cache block misses."
+                    ),
+                )
+            ),
+            CPUOffloadingMetrics.BLOCK_EVICTION_TOTAL: (
+                OffloadingCounterMetadata(
+                    documentation=(
+                        "Total number of CPU KV-cache block evictions."
+                    ),
+                )
+            ),
         }
         store_threshold = int(extra_config.get("store_threshold", 0))
         if store_threshold >= 2:
